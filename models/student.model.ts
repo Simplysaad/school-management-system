@@ -2,7 +2,7 @@
 import { Schema, model, models, Document, Types } from 'mongoose';
 
 export interface IStudentParent {
-  guardianId: Types.ObjectId;
+  parentId: Types.ObjectId;
   relationship: 'FATHER' | 'MOTHER' | 'UNCLE' | 'AUNT' | 'GUARDIAN' | 'SPONSOR';
   isPrimaryBillingContact: boolean;
 }
