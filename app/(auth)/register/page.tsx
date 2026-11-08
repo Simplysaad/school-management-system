@@ -1,229 +1,159 @@
 "use client";
 
-import { useState } from "react";
-import { registerUser, completeOnboarding } from "@/actions/user.action";
+import React, { useState } from "react";
 import { useRouter } from "next/navigation";
-import { UserCheck, Lock, Mail, User, Briefcase, MapPin, Phone, Building } from "lucide-react";
+import { registerUser } from "@/actions/user.action";
+
+// Single-tenant default school ID assignment
+const DEFAULT_SCHOOL_ID = "6af04b70434f64c2bc56739a";
 
 export default function RegisterPage() {
-    const router = useRouter();
-    const [step, setStep] = useState<1 | 2>(1);
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState("");
-    const [registeredUser, setRegisteredUser] = useState<any>(null);
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-    // Form states
-    const [formData, setFormData] = useState({
-        firstName: "",
-        lastName: "",
-        email: "",
-        password: "",
-        role: "PARENT",
-        schoolId: "650f19c41234567890abcdef", // Mock or dynamically bound school ID
-    });
+  const [formData, setFormData] = useState({
+    firstName: "",
+    lastName: "",
+    email: "",
+    password: "",
+    role: "SCHOOL_ADMIN",
+  });
 
-    const [onboardingData, setOnboardingData] = useState({
-        phone: "",
-        address: "",
-        occupation: "",
-        alternatePhone: "",
-    });
+  const handleChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>,
+  ) => {
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
 
-    const handleStep1Submit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setLoading(true);
-        setError("");
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
 
-        const res = await registerUser(formData);
-        setLoading(false);
+    try {
+      // Calls registerUser matching the exact server action signature
+      const res = await registerUser({
+        ...formData,
+        schoolId: DEFAULT_SCHOOL_ID,
+      });
 
-        if (!res.success) {
-            setError(res.error || "Registration error");
-            return;
-        }
+      if (!res.success) {
+        setError(res.error || "Registration failed");
+      } else {
+        router.push("/dashboard");
+      }
+    } catch (err: any) {
+      setError(
+        err?.message || "An unexpected error occurred during registration.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
 
-        setRegisteredUser(res.user);
-        setStep(2); // Move to role-specific onboarding
-    };
+  return (
+    <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 font-sans">
+      <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
+        <h1 className="text-3xl font-bold tracking-tight text-[#172B4D]">
+          EDVANCE SaaS
+        </h1>
+        <p className="mt-2 text-sm text-[#64748B]">Create your account</p>
+      </div>
 
-    const handleStep2Submit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setLoading(true);
-        setError("");
-
-        const res = await completeOnboarding(registeredUser._id, onboardingData);
-        setLoading(false);
-
-        if (!res.success) {
-            setError(res.error || "Onboarding failed");
-            return;
-        }
-
-        // Route to respective dashboard depending on role
-        router.push(`/dashboard/${formData.role.toLowerCase()}`);
-    };
-
-    return (
-        <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
-            <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-slate-100 p-8 space-y-6">
-                
-                {/* Header */}
-                <div className="text-center space-y-1">
-                    <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-                        {step === 1 ? "Create Account" : "Complete Profile Onboarding"}
-                    </h1>
-                    <p className="text-sm text-slate-500">
-                        {step === 1 ? "Step 1 of 2: Basic Credentials" : `Step 2 of 2: ${formData.role} Details`}
-                    </p>
-                </div>
-
-                {error && (
-                    <div className="bg-red-50 border border-red-200 text-red-600 text-sm p-3 rounded-lg">
-                        {error}
-                    </div>
-                )}
-
-                {/* STEP 1: Core User Info */}
-                {step === 1 && (
-                    <form onSubmit={handleStep1Submit} className="space-y-4">
-                        <div className="grid grid-cols-2 gap-3">
-                            <div>
-                                <label className="text-xs font-semibold text-slate-600">First Name</label>
-                                <div className="relative mt-1">
-                                    <User className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-                                    <input
-                                        type="text"
-                                        required
-                                        className="w-full pl-9 pr-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
-                                        placeholder="John"
-                                        value={formData.firstName}
-                                        onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
-                                    />
-                                </div>
-                            </div>
-                            <div>
-                                <label className="text-xs font-semibold text-slate-600">Last Name</label>
-                                <input
-                                    type="text"
-                                    required
-                                    className="w-full px-3 py-2 mt-1 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
-                                    placeholder="Doe"
-                                    value={formData.lastName}
-                                    onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
-                                />
-                            </div>
-                        </div>
-
-                        <div>
-                            <label className="text-xs font-semibold text-slate-600">Email Address</label>
-                            <div className="relative mt-1">
-                                <Mail className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-                                <input
-                                    type="email"
-                                    required
-                                    className="w-full pl-9 pr-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
-                                    placeholder="john@example.com"
-                                    value={formData.email}
-                                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                                />
-                            </div>
-                        </div>
-
-                        <div>
-                            <label className="text-xs font-semibold text-slate-600">Password</label>
-                            <div className="relative mt-1">
-                                <Lock className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-                                <input
-                                    type="password"
-                                    required
-                                    className="w-full pl-9 pr-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
-                                    placeholder="••••••••"
-                                    value={formData.password}
-                                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                                />
-                            </div>
-                        </div>
-
-                        <div>
-                            <label className="text-xs font-semibold text-slate-600">Select Role</label>
-                            <select
-                                className="w-full mt-1 px-3 py-2 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-900"
-                                value={formData.role}
-                                onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                            >
-                                <option value="PARENT">Parent / Guardian</option>
-                                <option value="TEACHER">Teacher</option>
-                            </select>
-                        </div>
-
-                        <button
-                            type="submit"
-                            disabled={loading}
-                            className="w-full py-2.5 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-800 transition disabled:opacity-50"
-                        >
-                            {loading ? "Creating account..." : "Continue to Onboarding"}
-                        </button>
-                    </form>
-                )}
-
-                {/* STEP 2: Role Specific Onboarding (e.g. Parent Attributes) */}
-                {step === 2 && formData.role === "PARENT" && (
-                    <form onSubmit={handleStep2Submit} className="space-y-4">
-                        <div>
-                            <label className="text-xs font-semibold text-slate-600">Phone Number</label>
-                            <div className="relative mt-1">
-                                <Phone className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-                                <input
-                                    type="tel"
-                                    required
-                                    className="w-full pl-9 pr-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
-                                    placeholder="+234 800 000 0000"
-                                    value={onboardingData.phone}
-                                    onChange={(e) => setOnboardingData({ ...onboardingData, phone: e.target.value })}
-                                />
-                            </div>
-                        </div>
-
-                        <div>
-                            <label className="text-xs font-semibold text-slate-600">Residential Address</label>
-                            <div className="relative mt-1">
-                                <MapPin className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-                                <input
-                                    type="text"
-                                    required
-                                    className="w-full pl-9 pr-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
-                                    placeholder="123 Education Lane"
-                                    value={onboardingData.address}
-                                    onChange={(e) => setOnboardingData({ ...onboardingData, address: e.target.value })}
-                                />
-                            </div>
-                        </div>
-
-                        <div>
-                            <label className="text-xs font-semibold text-slate-600">Occupation</label>
-                            <div className="relative mt-1">
-                                <Briefcase className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-                                <input
-                                    type="text"
-                                    className="w-full pl-9 pr-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
-                                    placeholder="Software Engineer"
-                                    value={onboardingData.occupation}
-                                    onChange={(e) => setOnboardingData({ ...onboardingData, occupation: e.target.value })}
-                                />
-                            </div>
-                        </div>
-
-                        <button
-                            type="submit"
-                            disabled={loading}
-                            className="w-full py-2.5 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-800 transition disabled:opacity-50"
-                        >
-                            {loading ? "Saving profile..." : "Complete Registration"}
-                        </button>
-                    </form>
-                )}
-
+      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
+        <div className="bg-white py-8 px-6 shadow-sm border border-slate-200 rounded-xl sm:px-10">
+          {error && (
+            <div className="mb-6 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-[#DC2626]">
+              {error}
             </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className="block text-xs font-medium text-[#172B4D]">
+                  First Name
+                </label>
+                <input
+                  type="text"
+                  name="firstName"
+                  required
+                  value={formData.firstName}
+                  onChange={handleChange}
+                  className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-[#2563EB] focus:outline-none focus:ring-1 focus:ring-[#2563EB]"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[#172B4D]">
+                  Last Name
+                </label>
+                <input
+                  type="text"
+                  name="lastName"
+                  required
+                  value={formData.lastName}
+                  onChange={handleChange}
+                  className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-[#2563EB] focus:outline-none focus:ring-1 focus:ring-[#2563EB]"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-[#172B4D]">
+                Email Address
+              </label>
+              <input
+                type="email"
+                name="email"
+                required
+                value={formData.email}
+                onChange={handleChange}
+                className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-[#2563EB] focus:outline-none focus:ring-1 focus:ring-[#2563EB]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-[#172B4D]">
+                Password
+              </label>
+              <input
+                type="password"
+                name="password"
+                required
+                value={formData.password}
+                onChange={handleChange}
+                className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-[#2563EB] focus:outline-none focus:ring-1 focus:ring-[#2563EB]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-[#172B4D]">
+                Role
+              </label>
+              <select
+                name="role"
+                value={formData.role}
+                onChange={handleChange}
+                className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-[#2563EB] focus:outline-none"
+              >
+                <option value="SCHOOL_ADMIN">School Admin</option>
+                <option value="TEACHER">Teacher</option>
+                <option value="PARENT">Parent</option>
+                <option value="STUDENT">Student</option>
+              </select>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-[#2563EB] hover:bg-blue-700 focus:outline-none disabled:opacity-50"
+            >
+              {loading ? "Registering..." : "Register Account"}
+            </button>
+          </form>
         </div>
-    );
+      </div>
+    </div>
+  );
 }

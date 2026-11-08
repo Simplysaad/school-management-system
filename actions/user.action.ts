@@ -61,11 +61,11 @@ export async function registerUser(formData: {
     // Create the base user
     const newUser = await User.create({
       ...formData,
-      passwordHash: hashedPassword, // matching your mongoose schema naming convention
+      password: hashedPassword, // matching your mongoose schema naming convention
     });
 
     const sanitizedUser = JSON.parse(JSON.stringify(newUser));
-    delete sanitizedUser.passwordHash;
+    delete sanitizedUser.password;
 
     await setUserSessionCookie(sanitizedUser);
 
@@ -79,22 +79,28 @@ export async function registerUser(formData: {
  * Step 2: Role-Specific Onboarding
  */
 
-export async function loginUser(email: string, password: string) {
+export async function loginUser({
+  email,
+  password,
+}: {
+  email: string;
+  password: string;
+}) {
   try {
     await connectDB();
-    const user = await User.findOne({ email }).select("+passwordHash");
+    const user = await User.findOne({ email }).select("+password");
 
-    if (!user || !user.passwordHash) {
+    if (!user || !user.password) {
       return { success: false, error: "Invalid email or password" };
     }
 
-    const isCorrectPassword = await bcrypt.compare(password, user.passwordHash);
+    const isCorrectPassword = await bcrypt.compare(password, user.password);
     if (!isCorrectPassword) {
       return { success: false, error: "Invalid email or password" };
     }
 
     const sanitizedUser = JSON.parse(JSON.stringify(user));
-    delete sanitizedUser.passwordHash;
+    delete sanitizedUser.password;
 
     await setUserSessionCookie(sanitizedUser);
     return { success: true, user: sanitizedUser };
@@ -120,34 +126,33 @@ export async function logoutUser() {
   return { success: true };
 }
 
-
 export async function completeOnboarding(userId: string, roleData: any) {
-    try {
-        await connectDB();
-        const user = await User.findById(userId);
+  try {
+    await connectDB();
+    const user = await User.findById(userId);
 
-        if (!user) {
-            return { success: false, error: "User session reference not found." };
-        }
-
-        if (user.role === "PARENT") {
-            // Create corresponding Parent document
-            await Parent.create({
-                schoolId: user.schoolId,
-                userId: user._id,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                email: user.email,
-                phone: roleData.phone,
-                address: roleData.address,
-                occupation: roleData.occupation,
-                alternatePhone: roleData.alternatePhone,
-            });
-        } 
-        // Add conditions here later for TEACHER, STUDENT profile collections if needed.
-
-        return { success: true };
-    } catch (error: any) {
-        return { success: false, error: error.message || "Onboarding failed" };
+    if (!user) {
+      return { success: false, error: "User session reference not found." };
     }
+
+    if (user.role === "PARENT") {
+      // Create corresponding Parent document
+      await Parent.create({
+        schoolId: user.schoolId,
+        userId: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phone: roleData.phone,
+        address: roleData.address,
+        occupation: roleData.occupation,
+        alternatePhone: roleData.alternatePhone,
+      });
+    }
+    // Add conditions here later for TEACHER, STUDENT profile collections if needed.
+
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message || "Onboarding failed" };
+  }
 }
