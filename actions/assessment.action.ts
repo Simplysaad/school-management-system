@@ -2,13 +2,13 @@
 
 import connectDB from "@/lib/db";
 import { Assessment } from "@/models/assessment.model";
-import { Grade } from "@/models/grade.model";
+import { Submission } from "@/models/submission.model";
 import { Student } from "@/models/student.model";
 import { authorizeGrading } from "@/lib/auth-guard";
 import { Types } from "mongoose";
 
 /**
- * 1. Create an Assessment Record
+ * 1. Create an Assessment Record (Supports PHYSICAL or ONLINE_QUIZ with embedded questions)
  */
 export async function createAssessment(
   userId: string,
@@ -19,8 +19,16 @@ export async function createAssessment(
     classId: string;
     subjectName: string;
     title: string;
+    type: "PHYSICAL" | "ONLINE_QUIZ";
     maxScore: number;
     weightage: number;
+    questions?: Array<{
+      title: string;
+      description: string;
+      type: "multiple-choice" | "true-false" | "short-answer" | "essay";
+      options?: Array<{ text: string; isCorrect: boolean }>;
+      points: number;
+    }>;
   },
 ) {
   try {
@@ -36,8 +44,10 @@ export async function createAssessment(
       term: data.term,
       subjectName: data.subjectName,
       title: data.title,
+      type: data.type || "PHYSICAL",
       maxScore: data.maxScore,
       weightage: data.weightage,
+      questions: data.type === "ONLINE_QUIZ" ? data.questions || [] : [],
     });
 
     return {
@@ -53,7 +63,7 @@ export async function createAssessment(
 }
 
 /**
- * 2. Option A: Input / Save Single Student Grade Individually
+ * 2. Option A: Input / Save Single Student Grade Individually (For PHYSICAL assessments)
  */
 export async function submitIndividualGrade(
   userId: string,
@@ -74,6 +84,14 @@ export async function submitIndividualGrade(
     });
     if (!assessment) return { success: false, error: "Assessment not found." };
 
+    if (assessment.type === "ONLINE_QUIZ") {
+      return {
+        success: false,
+        error:
+          "Online quizzes are automatically scored upon student submission.",
+      };
+    }
+
     // Verify authorization for the assessment's target class
     const auth = await authorizeGrading(
       userId,
@@ -89,20 +107,24 @@ export async function submitIndividualGrade(
       };
     }
 
-    // Upsert grade entry (Insert or update existing)
-    const grade = await Grade.findOneAndUpdate(
+    // Upsert submission/grade entry using isolated Submission model
+    const submission = await Submission.findOneAndUpdate(
       { schoolId, assessmentId: data.assessmentId, studentId: data.studentId },
       {
         $set: {
           scoreObtained: data.scoreObtained,
           remarks: data.remarks || "",
-          enteredBy: new Types.ObjectId(userId),
+          status: "GRADED",
+          gradedBy: new Types.ObjectId(userId),
         },
       },
       { upsert: true, new: true, runValidators: true },
     );
 
-    return { success: true, grade: JSON.parse(JSON.stringify(grade)) };
+    return {
+      success: true,
+      submission: JSON.parse(JSON.stringify(submission)),
+    };
   } catch (error: any) {
     return {
       success: false,
@@ -112,8 +134,7 @@ export async function submitIndividualGrade(
 }
 
 /**
- * 3. Option B: Bulk Upload Grades via CSV Batch
- * Expects CSV rows with headers: admissionNumber, scoreObtained, remarks
+ * 3. Option B: Bulk Upload Grades via CSV Batch (For PHYSICAL assessments)
  */
 export async function bulkUploadGradesFromCSV(
   userId: string,
@@ -135,7 +156,13 @@ export async function bulkUploadGradesFromCSV(
     if (!assessment)
       return { success: false, error: "Assessment context missing." };
 
-    // Authorization check
+    if (assessment.type === "ONLINE_QUIZ") {
+      return {
+        success: false,
+        error: "Cannot bulk upload CSV scores for online quiz assessments.",
+      };
+    }
+
     const auth = await authorizeGrading(
       userId,
       assessment.classId.toString(),
@@ -154,7 +181,6 @@ export async function bulkUploadGradesFromCSV(
         continue;
       }
 
-      // Lookup student by admission number within current school & class
       const student = await Student.findOne({
         schoolId,
         classId: assessment.classId,
@@ -179,7 +205,8 @@ export async function bulkUploadGradesFromCSV(
             $set: {
               scoreObtained: Number(record.scoreObtained),
               remarks: record.remarks || "",
-              enteredBy: new Types.ObjectId(userId),
+              status: "GRADED",
+              gradedBy: new Types.ObjectId(userId),
             },
           },
           upsert: true,
@@ -188,7 +215,7 @@ export async function bulkUploadGradesFromCSV(
     }
 
     if (bulkOps.length > 0) {
-      await Grade.bulkWrite(bulkOps);
+      await Submission.bulkWrite(bulkOps);
     }
 
     return {
@@ -203,7 +230,95 @@ export async function bulkUploadGradesFromCSV(
 }
 
 /**
- * 4. Get Assessment Summary with All Enrolled Students and Grades
+ * 4. Submit Online Quiz Student Attempt & Auto-Calculate Score
+ */
+export async function submitOnlineQuiz(
+  schoolId: string,
+  assessmentId: string,
+  studentId: string,
+  studentAnswers: Array<{
+    questionId: string;
+    selectedOptionIndex?: number;
+    textAnswer?: string;
+  }>,
+) {
+  try {
+    await connectDB();
+
+    const assessment = await Assessment.findOne({
+      _id: assessmentId,
+      schoolId,
+      type: "ONLINE_QUIZ",
+    });
+    if (!assessment)
+      return { success: false, error: "Quiz assessment not found." };
+
+    let totalScoreObtained = 0;
+    const processedAnswers = [];
+
+    for (const ans of studentAnswers) {
+      // Find question inside embedded subdocument array using Mongoose .id() helper
+      const question = assessment.questions.id(ans.questionId);
+      if (!question) continue;
+
+      let isCorrect = false;
+      let pointsAwarded = 0;
+
+      if (
+        question.type === "multiple-choice" ||
+        question.type === "true-false"
+      ) {
+        const correctOptionIndex = question.options?.findIndex(
+          (opt: any) => opt.isCorrect,
+        );
+        if (
+          correctOptionIndex !== undefined &&
+          correctOptionIndex === ans.selectedOptionIndex
+        ) {
+          isCorrect = true;
+          pointsAwarded = question.points;
+        }
+      } else {
+        // Short-answer or essay requires manual teacher grading later
+        isCorrect = false;
+        pointsAwarded = 0;
+      }
+
+      totalScoreObtained += pointsAwarded;
+
+      processedAnswers.push({
+        questionId: new Types.ObjectId(ans.questionId),
+        selectedOptionIndex: ans.selectedOptionIndex,
+        textAnswer: ans.textAnswer,
+        isCorrect,
+        pointsAwarded,
+      });
+    }
+
+    const submission = await Submission.findOneAndUpdate(
+      { schoolId, assessmentId, studentId },
+      {
+        $set: {
+          status: "SUBMITTED",
+          answers: processedAnswers,
+          scoreObtained: totalScoreObtained,
+          submittedAt: new Date(),
+        },
+      },
+      { upsert: true, new: true, runValidators: true },
+    );
+
+    return {
+      success: true,
+      submission: JSON.parse(JSON.stringify(submission)),
+    };
+  } catch (error: any) {
+    return { success: false, error: error.message || "Failed to submit quiz." };
+  }
+}
+
+/**
+ * 5. Get Assessment Summary with All Enrolled Students and Submissions (Gradebook)
  */
 export async function getAssessmentGradeSheet(
   userId: string,
@@ -234,18 +349,20 @@ export async function getAssessmentGradeSheet(
       .select("admissionNumber firstName lastName gender")
       .sort({ lastName: 1, firstName: 1 });
 
-    // Fetch existing grades recorded for this assessment
-    const existingGrades = await Grade.find({ schoolId, assessmentId });
-    const gradeMap = new Map(
-      existingGrades.map((g) => [g.studentId.toString(), g]),
+    // Fetch existing submissions recorded for this assessment
+    const existingSubmissions = await Submission.find({
+      schoolId,
+      assessmentId,
+    });
+    const submissionMap = new Map(
+      existingSubmissions.map((sub) => [sub.studentId.toString(), sub]),
     );
 
-    // Combine student list with recorded scores
     const roster = students.map((student) => {
-      const grade = gradeMap.get(student._id.toString());
+      const submission = submissionMap.get(student._id.toString());
       return {
         student: JSON.parse(JSON.stringify(student)),
-        grade: grade ? JSON.parse(JSON.stringify(grade)) : null,
+        grade: submission ? JSON.parse(JSON.stringify(submission)) : null,
       };
     });
 

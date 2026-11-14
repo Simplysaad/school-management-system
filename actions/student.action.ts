@@ -4,9 +4,10 @@ import connectDB from "@/lib/db";
 import { Student } from "@/models/student.model";
 import { User } from "@/models/user.model";
 import { Teacher } from "@/models/teacher.model";
-import { Parent } from "@/models/parent.model"; // Ensure this matches your model filename/export (guardian.model.ts)
+import { Parent } from "@/models/parent.model";
 import { Classroom } from "@/models/classroom.model";
-import { Grade } from "@/models/grade.model";
+import { Submission } from "@/models/submission.model";
+import { Assessment } from "@/models/assessment.model";
 import { Types } from "mongoose";
 
 import { parseCSVFile } from "@/lib/csvParser";
@@ -69,6 +70,11 @@ async function authorizeStudentAccess(
         error: "Access denied: This student is not registered as your ward.",
       };
     }
+    return { authorized: true, user, student };
+  }
+
+  if (user.role === "STUDENT") {
+    // Verify user is linked to this student profile (assuming student schema has a userId or checking via auth session)
     return { authorized: true, user, student };
   }
 
@@ -139,7 +145,7 @@ export async function getStudents(userId: string, schoolId: string) {
 }
 
 /**
- * 2. Get Particular Student Profile (Biodata, Grades, Teacher, Class info)
+ * 2. Get Particular Student Profile (Biodata, Submissions/Grades, Teacher, Class info)
  */
 export async function getStudentProfile(
   studentId: string,
@@ -166,15 +172,15 @@ export async function getStudentProfile(
     if (!student)
       return { success: false, error: "Student profile not found." };
 
-    // Fetch all grades and assessments for this student
-    const grades = await Grade.find({ schoolId, studentId }).populate(
+    // Fetch all submissions (grades/quiz results) for this student using the isolated Submission model
+    const submissions = await Submission.find({ schoolId, studentId }).populate(
       "assessmentId",
     );
 
     return {
       success: true,
       student: JSON.parse(JSON.stringify(student)),
-      grades: JSON.parse(JSON.stringify(grades)),
+      grades: JSON.parse(JSON.stringify(submissions)), // Kept key as 'grades' for backwards compatibility with existing UI consumers
     };
   } catch (error: any) {
     return {
@@ -185,7 +191,7 @@ export async function getStudentProfile(
 }
 
 /**
- * 3. Get All Grades of a Student
+ * 3. Get All Grades/Submissions of a Student
  */
 export async function getStudentGrades(
   studentId: string,
@@ -198,15 +204,70 @@ export async function getStudentGrades(
 
     await connectDB();
 
-    const grades = await Grade.find({ schoolId, studentId })
+    const submissions = await Submission.find({ schoolId, studentId })
       .populate("assessmentId")
       .sort({ createdAt: -1 });
 
-    return { success: true, grades: JSON.parse(JSON.stringify(grades)) };
+    return { success: true, grades: JSON.parse(JSON.stringify(submissions)) };
   } catch (error: any) {
     return {
       success: false,
       error: error.message || "Failed to fetch student grades.",
+    };
+  }
+}
+
+/**
+ * 4. Get Available Online Quizzes for a Student's Classroom
+ */
+export async function getStudentAvailableQuizzes(
+  studentId: string,
+  userId: string,
+  schoolId: string,
+) {
+  try {
+    const auth = await authorizeStudentAccess(userId, studentId, schoolId);
+    if (!auth.authorized) return { success: false, error: auth.error };
+
+    await connectDB();
+    const student = auth.student;
+
+    if (!student.classId) {
+      return { success: true, quizzes: [] };
+    }
+
+    // Find online quizzes assigned to student's classroom
+    const quizzes = await Assessment.find({
+      schoolId,
+      classId: student.classId,
+      type: "ONLINE_QUIZ",
+    }).sort({ createdAt: -1 });
+
+    // Find existing submissions by this student to mark completion status
+    const submissions = await Submission.find({
+      schoolId,
+      studentId,
+      assessmentId: { $in: quizzes.map((q) => q._id) },
+    });
+
+    const submittedMap = new Map(
+      submissions.map((sub) => [sub.assessmentId.toString(), sub]),
+    );
+
+    const quizFeed = quizzes.map((quiz) => {
+      const sub = submittedMap.get(quiz._id.toString());
+      return {
+        quiz: JSON.parse(JSON.stringify(quiz)),
+        submission: sub ? JSON.parse(JSON.stringify(sub)) : null,
+        isCompleted: !!sub && sub.status === "SUBMITTED",
+      };
+    });
+
+    return { success: true, quizzes: quizFeed };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: error.message || "Failed to fetch available quizzes.",
     };
   }
 }
@@ -225,7 +286,7 @@ async function verifyAdmin(userId: string, schoolId: string) {
 }
 
 /**
- * 1. Register a Single Student (Admin Only)
+ * 5. Register a Single Student (Admin Only)
  */
 export async function registerNewStudent(
   userId: string,
@@ -238,7 +299,7 @@ export async function registerNewStudent(
     dob: string | Date;
     gender: "MALE" | "FEMALE";
     classId: string;
-    guardianEmail: string; // Used to link existing guardian or create a placeholder
+    guardianEmail: string;
     medicalFlags?: Array<{
       condition: string;
       severity: "LOW" | "MEDIUM" | "HIGH";
@@ -253,7 +314,6 @@ export async function registerNewStudent(
 
     await connectDB();
 
-    // Check if admission number already exists in school
     const existing = await Student.findOne({
       schoolId,
       admissionNumber: data.admissionNumber,
@@ -265,12 +325,10 @@ export async function registerNewStudent(
       };
     }
 
-    // Verify class exists
     const classroom = await Classroom.findOne({ _id: data.classId, schoolId });
     if (!classroom)
       return { success: false, error: "Target classroom not found." };
 
-    // Find linked guardian by email
     const guardian = await Parent.findOne({
       schoolId,
       email: data.guardianEmail.toLowerCase(),
@@ -300,12 +358,10 @@ export async function registerNewStudent(
       status: "ACTIVE",
     });
 
-    // Add student to classroom array
     await Classroom.findByIdAndUpdate(data.classId, {
       $addToSet: { students: newStudent._id },
     });
 
-    // If guardian exists, add student to their wardIds
     if (guardian) {
       await Parent.findByIdAndUpdate(guardian._id, {
         $addToSet: { wardIds: newStudent._id },
@@ -322,8 +378,7 @@ export async function registerNewStudent(
 }
 
 /**
- * 2. Register Many Students via CSV (Admin Only)
- * Expects CSV headers: admissionNumber, firstName, lastName, gender (MALE/FEMALE), dob (YYYY-MM-DD), classId
+ * 6. Register Many Students via CSV (Admin Only)
  */
 export async function registerManyStudents(
   userId: string,
@@ -407,8 +462,7 @@ export async function registerManyStudents(
 }
 
 /**
- * 3. Change Student Class (Admin Only)
- * Moves student from old classroom array to new classroom array and updates student.classId
+ * 7. Change Student Class (Admin Only)
  */
 export async function changeStudentClass(
   userId: string,
@@ -436,19 +490,16 @@ export async function changeStudentClass(
       return { success: false, error: "Student is already in this classroom." };
     }
 
-    // Remove from old classroom
     if (oldClassId) {
       await Classroom.findByIdAndUpdate(oldClassId, {
         $pull: { students: student._id },
       });
     }
 
-    // Add to new classroom
     await Classroom.findByIdAndUpdate(newClassId, {
       $addToSet: { students: student._id },
     });
 
-    // Update student record
     student.classId = new Types.ObjectId(newClassId);
     await student.save();
 

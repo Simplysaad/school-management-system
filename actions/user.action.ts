@@ -4,6 +4,8 @@ import { cookies } from "next/headers";
 import connectDB from "@/lib/db";
 import User, { IUser } from "@/models/user.model";
 import { Parent } from "@/models/parent.model";
+import { Teacher } from "@/models/teacher.model";
+import { Student } from "@/models/student.model";
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 
@@ -17,6 +19,7 @@ async function setUserSessionCookie(user: Record<string, any>) {
     role: user.role,
     name: `${user.firstName || ""} ${user.lastName || ""}`.trim(),
     schoolId: user.schoolId,
+    isOnboarded: user.isOnboarded ?? false,
   });
 
   cookieStore.set("session", sessionData, {
@@ -61,7 +64,8 @@ export async function registerUser(formData: {
     // Create the base user
     const newUser = await User.create({
       ...formData,
-      password: hashedPassword, // matching your mongoose schema naming convention
+      password: hashedPassword,
+      isOnboarded: false,
     });
 
     const sanitizedUser = JSON.parse(JSON.stringify(newUser));
@@ -76,9 +80,8 @@ export async function registerUser(formData: {
 }
 
 /**
- * Step 2: Role-Specific Onboarding
+ * Step 2: Login User
  */
-
 export async function loginUser({
   email,
   password,
@@ -124,35 +127,4 @@ export async function logoutUser() {
   const cookieStore = await cookies();
   cookieStore.delete("session");
   return { success: true };
-}
-
-export async function completeOnboarding(userId: string, roleData: any) {
-  try {
-    await connectDB();
-    const user = await User.findById(userId);
-
-    if (!user) {
-      return { success: false, error: "User session reference not found." };
-    }
-
-    if (user.role === "PARENT") {
-      // Create corresponding Parent document
-      await Parent.create({
-        schoolId: user.schoolId,
-        userId: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        phone: roleData.phone,
-        address: roleData.address,
-        occupation: roleData.occupation,
-        alternatePhone: roleData.alternatePhone,
-      });
-    }
-    // Add conditions here later for TEACHER, STUDENT profile collections if needed.
-
-    return { success: true };
-  } catch (error: any) {
-    return { success: false, error: error.message || "Onboarding failed" };
-  }
 }

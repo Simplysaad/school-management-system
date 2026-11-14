@@ -4,7 +4,9 @@ import connectDB from "@/lib/db";
 import User from "@/models/user.model";
 import { Parent } from "@/models/parent.model";
 import { Teacher } from "@/models/teacher.model";
+import { Student } from "@/models/student.model";
 import { School } from "@/models/school.model";
+import { Types } from "mongoose";
 
 /**
  * Onboarding Handler for Parents
@@ -22,8 +24,8 @@ export async function onboardParent(
     const user = await User.findById(userId);
     if (!user) return { success: false, error: "User not found." };
 
-    const nameParts = user.name.split(" ");
-    const firstName = nameParts[0] || user.name;
+    const nameParts = user.name ? user.name.split(" ") : ["Parent"];
+    const firstName = nameParts[0] || "Parent";
     const lastName = nameParts.slice(1).join(" ") || "";
 
     // Create the Guardian record
@@ -33,7 +35,7 @@ export async function onboardParent(
       firstName,
       lastName,
       email: user.email,
-      phone: user.whatsappNumber,
+      phone: user.whatsappNumber || "",
       address: data.address,
       occupation: data.occupation,
       alternatePhone: data.alternatePhone,
@@ -58,6 +60,7 @@ export async function onboardParent(
 export async function onboardTeacher(
   userId: string,
   data: {
+    employeeId?: string;
     qualification: string;
     specialization: string;
     yearsOfExperience: number;
@@ -68,8 +71,14 @@ export async function onboardTeacher(
     const user = await User.findById(userId);
     if (!user) return { success: false, error: "User not found." };
 
-    // TODO: Save to Teacher collection once model is ready
-    await Teacher.create({ schoolId: user.schoolId, userId: user._id, ...data });
+    await Teacher.create({
+      schoolId: user.schoolId,
+      userId: user._id,
+      employeeId: data.employeeId || `TCH-${Date.now().toString().slice(-4)}`,
+      qualification: data.qualification,
+      specialization: data.specialization,
+      yearsOfExperience: data.yearsOfExperience || 0,
+    });
 
     user.isOnboarded = true;
     await user.save();
@@ -79,6 +88,43 @@ export async function onboardTeacher(
     return {
       success: false,
       error: error.message || "Failed to complete teacher onboarding.",
+    };
+  }
+}
+
+/**
+ * Onboarding Handler for Students (Linking User account to Student profile)
+ */
+export async function onboardStudent(
+  userId: string,
+  data: {
+    admissionNumber: string;
+  },
+) {
+  try {
+    await connectDB();
+    const user = await User.findById(userId);
+    if (!user) return { success: false, error: "User not found." };
+
+    // Find student record by school and admission number
+    const student = await Student.findOne({
+      schoolId: user.schoolId,
+      admissionNumber: data.admissionNumber.trim(),
+    });
+
+    if (!student) {
+      return { success: false, error: "Student record with this admission number was not found in your school." };
+    }
+
+    // Optionally link userId to student record if supported by schema, or verify match
+    user.isOnboarded = true;
+    await user.save();
+
+    return { success: true, student: JSON.parse(JSON.stringify(student)) };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: error.message || "Failed to complete student onboarding.",
     };
   }
 }
@@ -99,7 +145,16 @@ export async function onboardSchoolAdmin(
     const user = await User.findById(userId);
     if (!user) return { success: false, error: "User not found." };
 
-    // Update school branding/details metadata here if necessary
+    // Update school branding and details in the School model
+    if (user.schoolId) {
+      await School.findByIdAndUpdate(user.schoolId, {
+        $set: {
+          name: data.schoolName,
+          address: data.schoolAddress,
+          rcNumber: data.rcNumber || "",
+        },
+      });
+    }
 
     user.isOnboarded = true;
     await user.save();
